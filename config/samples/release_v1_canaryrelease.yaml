@@ -1,0 +1,12 @@
+apiVersion: release.example.com/v1
+kind: CanaryRelease
+metadata:
+  labels:
+    app.kubernetes.io/name: canaryrelease
+    app.kubernetes.io/instance: canaryrelease-sample
+    app.kubernetes.io/part-of: canary-operator
+    app.kubernetes.io/managed-by: kustomize
+    app.kubernetes.io/created-by: canary-operator
+  name: canaryrelease-sample
+spec:
+  # TODO(user): Add fields here
