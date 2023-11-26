@@ -26,6 +26,8 @@ import (
 	ctrl "sigs.k8s.io/controller-runtime"
 	"sigs.k8s.io/controller-runtime/pkg/client"
 	"sigs.k8s.io/controller-runtime/pkg/log"
+	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
+	apierrors "k8s.io/apimachinery/pkg/api/errors"
 )
 
 // CanaryReleaseReconciler reconciles a CanaryRelease object
@@ -39,43 +41,73 @@ func (r *CanaryReleaseReconciler) Reconcile(ctx context.Context, req ctrl.Reques
 	// 1. Ambil instance CanaryRelease dari cluster
 	cr := &releasev1.CanaryRelease{}
 	if err := r.Get(ctx, req.NamespacedName, cr); err != nil {
+		log.Error(err, "Canary resource not found!", "CanaryRelease", req.NamespacedName)
 		return ctrl.Result{}, client.IgnoreNotFound(err)
 	}
+	log.Info("Info: Got canary resource " + cr.Name)
 
-	// 2. Ambil instance Deployment dari cluster
+	// 2. Ambil instance Deployment utama dari cluster
 	appDeployment := &appsv1.Deployment{}
-	if err := r.Get(ctx, types.NamescpacedName{Name: cr.Spec.DeploymentName, Namespace: cr.Namespace}, appDeployment); err != nil {
+	if err := r.Get(ctx, types.NamespacedName{Name: cr.Spec.DeploymentName, Namespace: cr.Namespace}, appDeployment); err != nil {
 		log.Info("Warning: Deployment is not exist")
 	}
+	log.Info("Info: Primary deployment is: "+ cr.Spec.DeploymentName)
+
 	// 3. Cek resource canary deployment
-	canaryDeploymentName := cr.Spec.DeploymentPrimary + "-canary"
+	canaryDeploymentName := cr.Spec.DeploymentName + "-canary"
 	canaryDeployment := &appsv1.Deployment{}
 	err := r.Get(ctx, types.NamespacedName{Name: canaryDeploymentName, Namespace: req.Namespace}, canaryDeployment)
+
 	// 4. Buat canary deployment jika tidak ada
-	if err != nil && errors.IsNotFound(err) {
+	if err != nil && apierrors.IsNotFound(err) {
 	    canaryDeployment = createCanaryDeployment(cr, appDeployment, canaryDeploymentName)
-		if err := r.Create(ctx, &canaryDeployment); err != nil {
-				log.Info("Error: Failed to create canary deployment")
+		if err := r.Create(ctx, canaryDeployment); err != nil {
+			log.Error(err, "Error: Failed to create canary deployment", "CanaryRelease", req.NamespacedName)
 		}
-		log.Info("Warning: Canary deployment is not exist or failed to create")
+		log.Info("Info: Failed to get canary deployment resource, canary deployment will be created")
 	} else if err != nil {
-		log.Info("Warning: Failed to get canary deployment")
+		log.Error(err, "Warning: Failed to get canary deployment", "Deployment", req.NamespacedName)
 	}
 
 	// 4. Sesuaikan jumlah replika Deployment berdasarkan CanaryRelease
 	if err := r.adjustDeploymentReplicas(ctx, cr); err != nil {
 		return ctrl.Result{}, err
 	}
+	log.Info("Info: Adjusting deployment replica")
+
+	// Cek dan jalankan rollout atau rollback
+    if cr.Spec.PerformRollout {
+        if err := r.rollout(ctx, cr, appDeployment); err != nil {
+            log.Error(err, "Failed to perform rollout")
+            return ctrl.Result{}, err
+        }
+        // Reset PerformRollout field
+        cr.Spec.PerformRollout = false
+        if err := r.Update(ctx, cr); err != nil {
+            log.Error(err, "Failed to update CanaryRelease after rollout")
+        }
+
+    } else if cr.Spec.PerformRollback {
+        if err := r.rollback(ctx, cr, appDeployment); err != nil {
+            log.Error(err, "Failed to perform rollback")
+            return ctrl.Result{}, err
+        }
+        // Reset PerformRollback field
+        cr.Spec.PerformRollback = false
+        if err := r.Update(ctx, cr); err != nil {
+            log.Error(err, "Failed to update CanaryRelease after rollback")
+        }
+    }
 
 	return ctrl.Result{}, nil
 }
 
 // Fungsi untuk membuat deployment canary
 
-func createCanaryDeployment(cr releasev1.CanaryRelease, appDeployment appsv1.Deployment, name string) appsv1.Deployment {
+func createCanaryDeployment(cr *releasev1.CanaryRelease, appDeployment *appsv1.Deployment, name string) *appsv1.Deployment {
     // Copy deployment dari deployment utama
     canaryDeployment := appDeployment.DeepCopy()
-    var canaryLabel = map[string]string{"app":"canary"}
+    var canaryLabel = map[string]string{"version":"canary","app":cr.Spec.DeploymentName}
     canaryDeployment.ObjectMeta = metav1.ObjectMeta{
         Name:      name,
         Namespace: cr.Namespace,
@@ -84,8 +116,12 @@ func createCanaryDeployment(cr releasev1.CanaryRelease, appDeployment appsv1.Dep
 
     // Sesuaikan spesifikasi deployment canary sesuai kebutuhan
     canaryDeployment.Spec.Template.Spec.Containers[0].Image = cr.Spec.CanaryImage
+    canaryDeployment.Spec.Selector.MatchLabels = canaryLabel
+    canaryDeployment.Spec.Template.ObjectMeta = metav1.ObjectMeta{
+        Labels: canaryLabel,
+    }
 
-    return *canaryDeployment
+    return canaryDeployment
 }
 
 func (r *CanaryReleaseReconciler) adjustDeploymentReplicas(ctx context.Context, cr *releasev1.CanaryRelease) error {
@@ -95,7 +131,7 @@ func (r *CanaryReleaseReconciler) adjustDeploymentReplicas(ctx context.Context, 
 
 	// Mengambil dan memperbarui Deployment Primary
 	deploymentPrimary := &appsv1.Deployment{}
-	if err := r.Get(ctx, types.NamespacedName{Name: cr.Spec.DeploymentPrimary, Namespace: cr.Namespace}, deploymentPrimary); err != nil {
+	if err := r.Get(ctx, types.NamespacedName{Name: cr.Spec.DeploymentName, Namespace: cr.Namespace}, deploymentPrimary); err != nil {
 		return err
 	}
 	deploymentPrimary.Spec.Replicas = &replicasPrimary
@@ -105,13 +141,47 @@ func (r *CanaryReleaseReconciler) adjustDeploymentReplicas(ctx context.Context, 
 
 	// Mengambil dan memperbarui Deployment Canary
 	deploymentCanary := &appsv1.Deployment{}
-	if err := r.Get(ctx, types.NamespacedName{Name: cr.Spec.DeploymentCanary, Namespace: cr.Namespace}, deploymentCanary); err != nil {
+	if err := r.Get(ctx, types.NamespacedName{Name: cr.Spec.DeploymentName + "-canary", Namespace: cr.Namespace}, deploymentCanary); err != nil {
 		return err
 	}
+
 	deploymentCanary.Spec.Replicas = &replicasCanary
 	if err := r.Update(ctx, deploymentCanary); err != nil {
 		return err
 	}
+
+	return nil
+}
+
+func (r *CanaryReleaseReconciler) rollout(ctx context.Context, cr *releasev1.CanaryRelease, mainDeployment *appsv1.Deployment) error {
+    // Ganti image deployment utama dengan image canary
+    mainDeployment.Spec.Template.Spec.Containers[0].Image = cr.Spec.CanaryImage
+    if err := r.Update(ctx, mainDeployment); err != nil {
+        return err
+    }
+
+    // Set splitPercentage menjadi 100 & update image utama
+    cr.Spec.SplitPercentage = 100
+    cr.Spec.MainImage = cr.Spec.CanaryImage
+    if err := r.Update(ctx, cr); err != nil {
+        return err
+    }
+
+    return nil
+}
+
+func (r *CanaryReleaseReconciler) rollback(ctx context.Context, cr *releasev1.CanaryRelease, mainDeployment *appsv1.Deployment) error {
+    // Ganti image deployment utama dengan image existing
+    mainDeployment.Spec.Template.Spec.Containers[0].Image = cr.Spec.MainImage
+    if err := r.Update(ctx, mainDeployment); err != nil {
+        return err
+    }
+
+    // Set splitPercentage menjadi 100
+    cr.Spec.SplitPercentage = 100
+    if err := r.Update(ctx, cr); err != nil {
+        return err
+    }
 
 	return nil
 }

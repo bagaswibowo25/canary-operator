@@ -39,18 +39,24 @@ spec:
             properties:
               deploymentName:
                 type: string
-              deploymentCanary:
+              canaryImage:
                 type: string
-              deploymentPrimary:
+              mainImage:
                 type: string
+              performRollout:
+                type: boolean
+              performRollback:
+                type: boolean
               splitPercentage:
                 type: integer
               totalReplicas:
                 type: integer
             required:
             - deploymentName
-            - deploymentCanary
-            - deploymentPrimary
+            - canaryImage
+            - mainImage
+            - performRollout
+            - performRollback
             - splitPercentage
             - totalReplicas
             type: object

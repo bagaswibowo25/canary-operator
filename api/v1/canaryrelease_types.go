@@ -26,8 +26,10 @@ import (
 // CanaryReleaseSpec defines the desired state of CanaryRelease
 type CanaryReleaseSpec struct {
   DeploymentName string `json:"deploymentName"`
-  DeploymentPrimary string `json:"deploymentPrimary"`
-  DeploymentCanary string `json:"deploymentCanary"`
+  CanaryImage string `json:"canaryImage"`
+  MainImage string `json:"mainImage"`
+  PerformRollout bool `json:"performRollout"`
+  PerformRollback bool `json:"performRollback"`
   SplitPercentage int    `json:"splitPercentage"`
   TotalReplicas   int    `json:"totalReplicas"`
 
