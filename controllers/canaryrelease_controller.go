@@ -30,12 +30,13 @@ import (
 	apierrors "k8s.io/apimachinery/pkg/api/errors"
 )
 
-// CanaryReleaseReconciler reconciles a CanaryRelease object
+// CanaryReleaseReconciler untuk melakukan reconciles pada objek CanaryRelease
 type CanaryReleaseReconciler struct {
 	client.Client
 	Scheme *runtime.Scheme
 }
 
+// Fungsi utama untuk melakukan reconcile objek CanaryRelease
 func (r *CanaryReleaseReconciler) Reconcile(ctx context.Context, req ctrl.Request) (ctrl.Result, error) {
 	log := log.FromContext(ctx)
 	// 1. Ambil instance CanaryRelease dari cluster
@@ -69,35 +70,35 @@ func (r *CanaryReleaseReconciler) Reconcile(ctx context.Context, req ctrl.Reques
 		log.Error(err, "Warning: Failed to get canary deployment", "Deployment", req.NamespacedName)
 	}
 
-	// 4. Sesuaikan jumlah replika Deployment berdasarkan CanaryRelease
+	// 5. Sesuaikan jumlah replica Deployment berdasarkan CanaryRelease
 	if err := r.adjustDeploymentReplicas(ctx, cr); err != nil {
 		return ctrl.Result{}, err
 	}
 	log.Info("Info: Adjusting deployment replica")
 
-	// Cek dan jalankan rollout atau rollback
-    if cr.Spec.PerformRollout {
-        if err := r.rollout(ctx, cr, appDeployment); err != nil {
-            log.Error(err, "Failed to perform rollout")
-            return ctrl.Result{}, err
-        }
-        // Reset PerformRollout field
-        cr.Spec.PerformRollout = false
-        if err := r.Update(ctx, cr); err != nil {
-            log.Error(err, "Failed to update CanaryRelease after rollout")
-        }
-
-    } else if cr.Spec.PerformRollback {
-        if err := r.rollback(ctx, cr, appDeployment); err != nil {
-            log.Error(err, "Failed to perform rollback")
-            return ctrl.Result{}, err
-        }
-        // Reset PerformRollback field
+	// 6. Melakukan pengecekan dan jalankan rollout atau rollback
+	if cr.Spec.PerformRollout {
+		if err := r.rollout(ctx, cr, appDeployment); err != nil {
+		    log.Error(err, "Failed to perform rollout")
+		    return ctrl.Result{}, err
+		}
+		// 7. Reset PerformRollout field
+		cr.Spec.PerformRollout = false
+		if err := r.Update(ctx, cr); err != nil {
+		    log.Error(err, "Failed to update CanaryRelease after rollout")
+		}
+	}
+	else if cr.Spec.PerformRollback {
+		if err := r.rollback(ctx, cr, appDeployment); err != nil {
+			log.Error(err, "Failed to perform rollback")
+			return ctrl.Result{}, err
+	    }
+        // 8. Reset PerformRollback field
         cr.Spec.PerformRollback = false
         if err := r.Update(ctx, cr); err != nil {
             log.Error(err, "Failed to update CanaryRelease after rollback")
         }
-    }
+	}
 
 	return ctrl.Result{}, nil
 }
@@ -105,7 +106,7 @@ func (r *CanaryReleaseReconciler) Reconcile(ctx context.Context, req ctrl.Reques
 // Fungsi untuk membuat deployment canary
 
 func createCanaryDeployment(cr *releasev1.CanaryRelease, appDeployment *appsv1.Deployment, name string) *appsv1.Deployment {
-    // Copy deployment dari deployment utama
+    // 1. Copy deployment dari deployment utama
     canaryDeployment := appDeployment.DeepCopy()
     var canaryLabel = map[string]string{"version":"canary","app":cr.Spec.DeploymentName}
     canaryDeployment.ObjectMeta = metav1.ObjectMeta{
@@ -114,7 +115,7 @@ func createCanaryDeployment(cr *releasev1.CanaryRelease, appDeployment *appsv1.D
 	Labels:    canaryLabel,
     }
 
-    // Sesuaikan spesifikasi deployment canary sesuai kebutuhan
+    // 2. Sesuaikan spesifikasi deployment canary sesuai kebutuhan
     canaryDeployment.Spec.Template.Spec.Containers[0].Image = cr.Spec.CanaryImage
     canaryDeployment.Spec.Selector.MatchLabels = canaryLabel
     canaryDeployment.Spec.Template.ObjectMeta = metav1.ObjectMeta{
@@ -124,12 +125,14 @@ func createCanaryDeployment(cr *releasev1.CanaryRelease, appDeployment *appsv1.D
     return canaryDeployment
 }
 
+// Fungsi untuk mengatur jumlah replica untuk deployment utama dan deployment canary
+
 func (r *CanaryReleaseReconciler) adjustDeploymentReplicas(ctx context.Context, cr *releasev1.CanaryRelease) error {
-	// Menghitung jumlah replika berdasarkan splitPercentage
+	// 1. Menghitung jumlah replika berdasarkan splitPercentage
 	replicasPrimary := int32(math.Round(float64(cr.Spec.TotalReplicas) * (float64(cr.Spec.SplitPercentage) / 100.0)))
 	replicasCanary := int32(cr.Spec.TotalReplicas) - replicasPrimary
 
-	// Mengambil dan memperbarui Deployment Primary
+	// 2. Mengambil dan memperbarui Deployment Primary
 	deploymentPrimary := &appsv1.Deployment{}
 	if err := r.Get(ctx, types.NamespacedName{Name: cr.Spec.DeploymentName, Namespace: cr.Namespace}, deploymentPrimary); err != nil {
 		return err
@@ -139,12 +142,11 @@ func (r *CanaryReleaseReconciler) adjustDeploymentReplicas(ctx context.Context, 
 		return err
 	}
 
-	// Mengambil dan memperbarui Deployment Canary
+	// 3. Mengambil dan memperbarui Deployment Canary
 	deploymentCanary := &appsv1.Deployment{}
 	if err := r.Get(ctx, types.NamespacedName{Name: cr.Spec.DeploymentName + "-canary", Namespace: cr.Namespace}, deploymentCanary); err != nil {
 		return err
 	}
-
 	deploymentCanary.Spec.Replicas = &replicasCanary
 	if err := r.Update(ctx, deploymentCanary); err != nil {
 		return err
@@ -153,14 +155,16 @@ func (r *CanaryReleaseReconciler) adjustDeploymentReplicas(ctx context.Context, 
 	return nil
 }
 
+// Fungsi untuk melakukan rollout pada deployment
+
 func (r *CanaryReleaseReconciler) rollout(ctx context.Context, cr *releasev1.CanaryRelease, mainDeployment *appsv1.Deployment) error {
-    // Ganti image deployment utama dengan image canary
+    // 1.  Ganti image deployment utama dengan image canary
     mainDeployment.Spec.Template.Spec.Containers[0].Image = cr.Spec.CanaryImage
     if err := r.Update(ctx, mainDeployment); err != nil {
         return err
     }
 
-    // Set splitPercentage menjadi 100 & update image utama
+    // 2. Set splitPercentage menjadi 100 & update image utama
     cr.Spec.SplitPercentage = 100
     cr.Spec.MainImage = cr.Spec.CanaryImage
     if err := r.Update(ctx, cr); err != nil {
@@ -170,14 +174,16 @@ func (r *CanaryReleaseReconciler) rollout(ctx context.Context, cr *releasev1.Can
     return nil
 }
 
+// Fungsi untuk melakukan rollback pada deployment
+
 func (r *CanaryReleaseReconciler) rollback(ctx context.Context, cr *releasev1.CanaryRelease, mainDeployment *appsv1.Deployment) error {
-    // Ganti image deployment utama dengan image existing
+    // 1. Ganti image deployment utama dengan image existing
     mainDeployment.Spec.Template.Spec.Containers[0].Image = cr.Spec.MainImage
     if err := r.Update(ctx, mainDeployment); err != nil {
         return err
     }
 
-    // Set splitPercentage menjadi 100
+    // 2. Set splitPercentage menjadi 100
     cr.Spec.SplitPercentage = 100
     if err := r.Update(ctx, cr); err != nil {
         return err
