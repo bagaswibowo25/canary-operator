@@ -43,7 +43,7 @@ spec:
         - /manager
         args:
         - --leader-elect
-        image: bagas25/canary-operator:v1
+        image: bagas25/canary-operator:v3
         imagePullPolicy: Always
         name: manager
         securityContext:

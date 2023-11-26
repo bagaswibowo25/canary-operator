@@ -19,12 +19,13 @@ package controllers
 import (
 	appsv1 "k8s.io/api/apps/v1"
 	"math"
-  "k8s.io/apimachinery/pkg/runtime"
-  releasev1 "github.com/bagaswibowo25/canary-operator/api/v1"
-  "k8s.io/apimachinery/pkg/types"
-  "context"
+	"k8s.io/apimachinery/pkg/runtime"
+	releasev1 "github.com/bagaswibowo25/canary-operator/api/v1"
+	"k8s.io/apimachinery/pkg/types"
+	"context"
 	ctrl "sigs.k8s.io/controller-runtime"
 	"sigs.k8s.io/controller-runtime/pkg/client"
+	"sigs.k8s.io/controller-runtime/pkg/log"
 )
 
 // CanaryReleaseReconciler reconciles a CanaryRelease object
@@ -34,18 +35,57 @@ type CanaryReleaseReconciler struct {
 }
 
 func (r *CanaryReleaseReconciler) Reconcile(ctx context.Context, req ctrl.Request) (ctrl.Result, error) {
-	// 1. Ambil instance CanaryRelease dari kluster
+	log := log.FromContext(ctx)
+	// 1. Ambil instance CanaryRelease dari cluster
 	cr := &releasev1.CanaryRelease{}
 	if err := r.Get(ctx, req.NamespacedName, cr); err != nil {
 		return ctrl.Result{}, client.IgnoreNotFound(err)
 	}
 
-	// 2. Sesuaikan jumlah replika Deployment berdasarkan CanaryRelease
+	// 2. Ambil instance Deployment dari cluster
+	appDeployment := &appsv1.Deployment{}
+	if err := r.Get(ctx, types.NamescpacedName{Name: cr.Spec.DeploymentName, Namespace: cr.Namespace}, appDeployment); err != nil {
+		log.Info("Warning: Deployment is not exist")
+	}
+	// 3. Cek resource canary deployment
+	canaryDeploymentName := cr.Spec.DeploymentPrimary + "-canary"
+	canaryDeployment := &appsv1.Deployment{}
+	err := r.Get(ctx, types.NamespacedName{Name: canaryDeploymentName, Namespace: req.Namespace}, canaryDeployment)
+	// 4. Buat canary deployment jika tidak ada
+	if err != nil && errors.IsNotFound(err) {
+	    canaryDeployment = createCanaryDeployment(cr, appDeployment, canaryDeploymentName)
+		if err := r.Create(ctx, &canaryDeployment); err != nil {
+				log.Info("Error: Failed to create canary deployment")
+		}
+		log.Info("Warning: Canary deployment is not exist or failed to create")
+	} else if err != nil {
+		log.Info("Warning: Failed to get canary deployment")
+	}
+
+	// 4. Sesuaikan jumlah replika Deployment berdasarkan CanaryRelease
 	if err := r.adjustDeploymentReplicas(ctx, cr); err != nil {
 		return ctrl.Result{}, err
 	}
 
 	return ctrl.Result{}, nil
+}
+
+// Fungsi untuk membuat deployment canary
+
+func createCanaryDeployment(cr releasev1.CanaryRelease, appDeployment appsv1.Deployment, name string) appsv1.Deployment {
+    // Copy deployment dari deployment utama
+    canaryDeployment := appDeployment.DeepCopy()
+    var canaryLabel = map[string]string{"app":"canary"}
+    canaryDeployment.ObjectMeta = metav1.ObjectMeta{
+        Name:      name,
+        Namespace: cr.Namespace,
+	Labels:    canaryLabel,
+    }
+
+    // Sesuaikan spesifikasi deployment canary sesuai kebutuhan
+    canaryDeployment.Spec.Template.Spec.Containers[0].Image = cr.Spec.CanaryImage
+
+    return *canaryDeployment
 }
 
 func (r *CanaryReleaseReconciler) adjustDeploymentReplicas(ctx context.Context, cr *releasev1.CanaryRelease) error {

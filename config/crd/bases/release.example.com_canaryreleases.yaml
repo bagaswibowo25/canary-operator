@@ -37,6 +37,8 @@ spec:
           spec:
             description: CanaryReleaseSpec defines the desired state of CanaryRelease
             properties:
+              deploymentName:
+                type: string
               deploymentCanary:
                 type: string
               deploymentPrimary:
@@ -46,6 +48,7 @@ spec:
               totalReplicas:
                 type: integer
             required:
+            - deploymentName
             - deploymentCanary
             - deploymentPrimary
             - splitPercentage
