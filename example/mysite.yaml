@@ -1,0 +1,78 @@
+apiVersion: release.example.com/v1
+kind: CanaryRelease
+metadata:
+  name: webserver-canary
+  namespace: webserver
+spec:
+  deploymentName: "mysite"
+  deploymentCanary: "nginx-deployment-canary"
+  canaryImage: "bagas25/mysite:v2"
+  mainImage: "bagas25/mysite:v1"
+  performRollout: false
+  performRollback: false
+  splitPercentage: 100
+  totalReplicas: 10
+---
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: landing-page
+  namespace: mysite
+  labels:
+    app: landing-page
+    version: main
+spec:
+  selector:
+    matchLabels:
+      app: landing-page
+      version: main
+  template:
+    metadata:
+      labels:
+        app: landing-page
+        version: main
+    spec:
+      containers:
+      - name: webstore
+        image: bagas25/mysite:1.0
+        imagePullPolicy: Always
+        ports:
+        - containerPort: 80
+        resources:
+          requests:
+            memory: "64Mi"
+            cpu: "250m"
+          limits:
+            memory: "128Mi"
+            cpu: "500m"
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: mysite-service
+  namespace: mysite
+spec:
+  selector:
+    app: mysite
+  ports:
+  - protocol: TCP
+    port: 80
+    targetPort: 80
+---
+apiVersion: networking.k8s.io/v1
+kind: Ingress
+metadata:
+  name: mysite-ingress
+  namespace: mysite
+spec:
+  rules:
+  - host: mysite.example.com
+    http:
+      paths:
+      - pathType: Prefix
+        path: "/"
+        backend:
+          service:
+            name: mysite-service
+            port:
+              number: 80
